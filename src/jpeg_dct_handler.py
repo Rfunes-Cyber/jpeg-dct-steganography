@@ -99,7 +99,7 @@ class JPEGDCTHandler:
         self._require_loaded()
 
         for name, component in self.get_components():
-            print(f"\\nFirst {name} block:")
+            print(f"\nFirst {name} block:")
             print(component[0, 0])
 
     # -------------------------------------------------------------------------
