@@ -31,6 +31,16 @@ from jpeg_dct_handler import JPEGDCTHandler
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ORIGINAL_JPEG = REPO_ROOT / "test.jpg"
+GRAYSCALE_JPEG = REPO_ROOT / "grayscale_test.jpg"
+
+
+def _payload_capacity_bytes(jpeg_path: Path) -> int:
+    """Report the same capacity encode_message() itself relies on, so
+    boundary tests stay correct even if the fixture JPEG changes."""
+
+    handler = JPEGDCTHandler()
+    handler.load(str(jpeg_path))
+    return handler.payload_capacity_bytes(HEADER_BITS)
 
 
 def _embed_bits(input_path: Path, output_path: Path, bits: str) -> None:
@@ -127,6 +137,100 @@ def test_binary_data(tmp_path):
 
     assert output_path.read_bytes() == raw_message
     assert result.message_bytes == len(raw_message)
+
+
+def test_message_at_exact_capacity_boundary(tmp_path):
+    """A message that uses every last available payload bit is the
+    off-by-one risk case: one bit short or over would either lose data
+    or run past the image's usable coefficients."""
+
+    capacity_bytes = _payload_capacity_bytes(ORIGINAL_JPEG)
+    message = "A" * capacity_bytes
+
+    stego_path = tmp_path / "stego.jpg"
+    output_path = tmp_path / "recovered.txt"
+
+    encoding_result = encode_message(str(ORIGINAL_JPEG), str(stego_path), message)
+    assert encoding_result.message_was_truncated is False
+
+    decoding_result = decode_message(str(stego_path), str(output_path))
+
+    assert output_path.read_bytes() == message.encode("ascii")
+    assert decoding_result.message_bytes == capacity_bytes
+
+
+def test_decodes_truncated_message_correctly(tmp_path):
+    """When a message is too big to fit, encode_message() truncates it to
+    whole ASCII characters before embedding. The decoder should recover
+    exactly that truncated payload -- not the full original message and
+    not garbage past the truncation point."""
+
+    capacity_bytes = _payload_capacity_bytes(ORIGINAL_JPEG)
+    oversized_message = "B" * (capacity_bytes + 500)
+
+    stego_path = tmp_path / "stego.jpg"
+    output_path = tmp_path / "recovered.txt"
+
+    encoding_result = encode_message(
+        str(ORIGINAL_JPEG), str(stego_path), oversized_message,
+    )
+    assert encoding_result.message_was_truncated is True
+
+    decoding_result = decode_message(str(stego_path), str(output_path))
+
+    expected = oversized_message[:capacity_bytes].encode("ascii")
+    assert output_path.read_bytes() == expected
+    assert decoding_result.message_bytes == capacity_bytes
+
+
+def test_decode_is_read_only_and_idempotent(tmp_path):
+    """Decoding must not mutate the stego JPEG, and decoding the same file
+    twice must yield identical results -- a decoder that (accidentally)
+    wrote back to the input, or depended on hidden iterator state, would
+    fail this."""
+
+    message = "idempotent decode check"
+    stego_path = tmp_path / "stego.jpg"
+    first_output = tmp_path / "first.txt"
+    second_output = tmp_path / "second.txt"
+
+    encode_message(str(ORIGINAL_JPEG), str(stego_path), message)
+    stego_bytes_before = stego_path.read_bytes()
+
+    decode_message(str(stego_path), str(first_output))
+    decode_message(str(stego_path), str(second_output))
+
+    assert first_output.read_bytes() == second_output.read_bytes() == message.encode("ascii")
+    assert stego_path.read_bytes() == stego_bytes_before
+
+
+def test_decode_creates_missing_output_directories(tmp_path):
+    """The output path's parent directories may not exist yet; the decoder
+    should create them rather than raising a bare FileNotFoundError."""
+
+    message = "nested output path"
+    stego_path = tmp_path / "stego.jpg"
+    nested_output = tmp_path / "a" / "b" / "c" / "recovered.txt"
+
+    encode_message(str(ORIGINAL_JPEG), str(stego_path), message)
+    decode_message(str(stego_path), str(nested_output))
+
+    assert nested_output.read_bytes() == message.encode("ascii")
+
+
+def test_decode_grayscale_jpeg_with_no_chroma_components(tmp_path):
+    """A grayscale JPEG has no Cb/Cr components at all
+    (JPEGDCTHandler.get_components() only yields "Y" in that case). The
+    decoder must work using only the Y component's usable coefficients."""
+
+    message = "grayscale only"
+    stego_path = tmp_path / "stego.jpg"
+    output_path = tmp_path / "recovered.txt"
+
+    encode_message(str(GRAYSCALE_JPEG), str(stego_path), message)
+    decode_message(str(stego_path), str(output_path))
+
+    assert output_path.read_bytes() == message.encode("ascii")
 
 
 def test_no_embedding_level_parameter_exists():
