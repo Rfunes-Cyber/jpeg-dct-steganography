@@ -1,5 +1,6 @@
 import argparse
 import sys
+from pathlib import Path
 
 from decoder import decode_message, print_decoding_result
 from encoder import encode_message, print_encoding_result
@@ -32,8 +33,39 @@ def _build_parser() -> argparse.ArgumentParser:
         "output_file",
         help="Path to write the recovered message (raw bytes).",
     )
+    decode_parser.add_argument(
+        "--show",
+        action="store_true",
+        help=(
+            "Also print the recovered message as ASCII text. Off by "
+            "default because the underlying decode is binary-safe and "
+            "should not assume recovered bytes are text."
+        ),
+    )
 
     return parser
+
+
+def _display_as_ascii(output_path: str) -> None:
+    """Print the recovered file's contents as ASCII text.
+
+    Only called when the user explicitly passes --show: decode_message()
+    itself stays binary-safe, so this reads the bytes back from disk
+    rather than having the decoder assume text.
+    """
+
+    recovered_bytes = Path(output_path).read_bytes()
+
+    try:
+        message = recovered_bytes.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise ValueError(
+            "Recovered data is not ASCII text -- inspect the output "
+            f"file directly: {output_path}"
+        ) from error
+
+    print("\nSecret message:")
+    print(message)
 
 
 def main() -> None:
@@ -54,6 +86,9 @@ def main() -> None:
                 args.output_file,
             )
             print_decoding_result(result)
+
+            if args.show:
+                _display_as_ascii(args.output_file)
 
     except (FileNotFoundError, ValueError, RuntimeError) as error:
         print(f"\n{args.command.capitalize()} failed: {error}", file=sys.stderr)
