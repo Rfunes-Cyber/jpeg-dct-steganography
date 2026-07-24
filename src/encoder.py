@@ -1,6 +1,10 @@
 from dataclasses import dataclass
+from typing import Iterator
 
-from jpeg_dct_handler import JPEGDCTHandler
+from jpeg_dct_handler import (
+    CoefficientLocation,
+    JPEGDCTHandler,
+)
 
 
 HEADER_BITS = 32
@@ -27,18 +31,17 @@ class EncodingResult:
 
 
 def choose_embedding_preset() -> int:
-    """Prompt the user to choose an embedding preset."""
+    """Prompt the user to select an embedding preset."""
 
-    print("\nEmbedding Preset")
-    print()
+    print("\nEmbedding Presets")
     print("1 - Maximum Capacity")
-    print("    Unlimited bits/block")
+    print("    Uses every usable coefficient.")
     print()
     print("2 - Balanced")
-    print("    4 bits/block")
+    print("    Uses up to 4 coefficients per 8x8 block.")
     print()
     print("3 - Low Detectability")
-    print("    2 bits/block")
+    print("    Uses up to 2 coefficients per 8x8 block.")
 
     while True:
         choice = input("\nSelect a preset (1-3): ").strip()
@@ -46,7 +49,7 @@ def choose_embedding_preset() -> int:
         if choice in {"1", "2", "3"}:
             return int(choice)
 
-        print("Invalid selection. Please choose 1, 2, or 3.")
+        print("Invalid selection. Enter 1, 2, or 3.")
 
 
 def get_embedding_preset(
@@ -101,7 +104,7 @@ def coefficient_parity(value: int) -> int:
 
 
 def change_parity(value: int, required_bit: int) -> int:
-    """Modify a coefficient so its parity matches the required bit."""
+    """Change a coefficient so its parity matches a message bit."""
 
     if required_bit not in {0, 1}:
         raise ValueError(
@@ -125,10 +128,10 @@ def change_parity(value: int, required_bit: int) -> int:
 def iter_selected_coefficients(
     handler: JPEGDCTHandler,
     max_bits_per_block: int | None,
-):
+) -> Iterator[tuple[CoefficientLocation, int]]:
     """Yield coefficients allowed by the selected preset."""
 
-    current_block = None
+    current_block: tuple[str, int, int] | None = None
     bits_used_in_block = 0
 
     for location, value in handler.iter_usable_coefficients():
@@ -209,22 +212,22 @@ def encode_message(
     handler = JPEGDCTHandler()
     handler.load(input_path)
 
-    usable_coefficient_count = (
+    selected_coefficient_count = (
         count_selected_coefficients(
             handler,
             max_bits_per_block,
         )
     )
 
-    if usable_coefficient_count < HEADER_BITS:
+    if selected_coefficient_count < HEADER_BITS:
         raise ValueError(
-            "This JPEG does not contain enough usable coefficients "
+            "This JPEG does not contain enough selected coefficients "
             f"for the {HEADER_BITS}-bit message header using the "
             f"{preset_name} preset."
         )
 
     available_payload_bits = (
-        usable_coefficient_count - HEADER_BITS
+        selected_coefficient_count - HEADER_BITS
     )
 
     available_payload_bytes = (
@@ -238,12 +241,12 @@ def encode_message(
         )
     )
 
-    header = integer_to_bits(
+    header_bits = integer_to_bits(
         len(payload_bits),
         HEADER_BITS,
     )
 
-    complete_bitstream = header + payload_bits
+    complete_bitstream = header_bits + payload_bits
     modified_coefficients = 0
 
     coefficient_iterator = iter_selected_coefficients(
@@ -268,7 +271,6 @@ def encode_message(
                 location,
                 new_value,
             )
-
             modified_coefficients += 1
 
     handler.save(output_path)
@@ -298,22 +300,27 @@ def print_encoding_result(
     print("\nEncoding complete.")
     print("Embedding preset:", result.preset_name)
     print("Maximum bits per block:", block_limit)
+
     print(
         "Available message capacity:",
         f"{result.available_payload_bytes} bytes",
     )
+
     print(
         "Original message size:",
         f"{result.original_message_bytes} bytes",
     )
+
     print(
         "Embedded message size:",
         f"{result.embedded_message_bytes} bytes",
     )
+
     print(
         "Embedded payload bits:",
         result.embedded_payload_bits,
     )
+
     print(
         "Modified coefficients:",
         result.modified_coefficients,
