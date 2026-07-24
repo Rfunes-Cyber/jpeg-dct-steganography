@@ -20,15 +20,27 @@ def _build_parser() -> argparse.ArgumentParser:
         "encode",
         help="Embed a message into a JPEG.",
     )
-    encode_parser.add_argument("input_jpeg", help="Path to the cover JPEG.")
-    encode_parser.add_argument("output_jpeg", help="Path to write the stego JPEG.")
-    encode_parser.add_argument("message", help="Secret message to embed (ASCII only).")
+    encode_parser.add_argument(
+        "input_jpeg",
+        help="Path to the cover JPEG.",
+    )
+    encode_parser.add_argument(
+        "output_jpeg",
+        help="Path to write the stego JPEG.",
+    )
+    encode_parser.add_argument(
+        "message",
+        help="Secret message to embed (ASCII only).",
+    )
 
     decode_parser = subparsers.add_parser(
         "decode",
         help="Extract a message from a stego JPEG.",
     )
-    decode_parser.add_argument("input_jpeg", help="Path to the stego JPEG.")
+    decode_parser.add_argument(
+        "input_jpeg",
+        help="Path to the stego JPEG.",
+    )
     decode_parser.add_argument(
         "output_file",
         help="Path to write the recovered message (raw bytes).",
@@ -44,6 +56,34 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+def _choose_embedding_preset() -> int:
+    """Display the embedding preset menu and return the user's choice."""
+
+    print("\nChoose an embedding preset:\n")
+
+    print("1. Maximum Capacity")
+    print("   Uses all available coefficients in each 8x8 block.")
+    print("   Provides the highest message capacity.\n")
+
+    print("2. Balanced")
+    print("   Uses up to 4 coefficients in each 8x8 block.")
+    print("   Balances message capacity and detectability.\n")
+
+    print("3. Low Detectability")
+    print("   Uses up to 2 coefficients in each 8x8 block.")
+    print("   Provides lower capacity with fewer coefficient changes.\n")
+
+    while True:
+        choice = input("Enter your choice (1-3): ").strip()
+
+        if choice in ("1", "2", "3"):
+            return int(choice)
+
+        print(
+            "\nInvalid selection. Please enter 1, 2, or 3.\n"
+        )
 
 
 def _display_as_ascii(output_path: str) -> None:
@@ -74,12 +114,16 @@ def main() -> None:
 
     try:
         if args.command == "encode":
+            preset_choice = _choose_embedding_preset()
+
             result = encode_message(
                 args.input_jpeg,
                 args.output_jpeg,
                 args.message,
+                preset_choice,
             )
             print_encoding_result(result)
+
         else:
             result = decode_message(
                 args.input_jpeg,
@@ -91,7 +135,10 @@ def main() -> None:
                 _display_as_ascii(args.output_file)
 
     except (FileNotFoundError, ValueError, RuntimeError) as error:
-        print(f"\n{args.command.capitalize()} failed: {error}", file=sys.stderr)
+        print(
+            f"\n{args.command.capitalize()} failed: {error}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 
