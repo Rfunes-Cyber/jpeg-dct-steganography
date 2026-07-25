@@ -1,3 +1,13 @@
+# CS 4463 - Steganography
+# Group 6 - Milestone #2
+#
+# Team Members:
+# Raymond Funes
+# Jermaine K Morehead
+# Shruthi Senthilarasu
+#
+# JPEG DCT Coefficient Parity Steganography
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
