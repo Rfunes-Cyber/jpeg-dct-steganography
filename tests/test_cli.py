@@ -13,9 +13,21 @@ CLI_PATH = REPO_ROOT / "src" / "cli.py"
 ORIGINAL_JPEG = REPO_ROOT / "test.jpg"
 
 
-def _run_cli(*args: str) -> subprocess.CompletedProcess:
+def _run_cli(
+    *args: str,
+    preset_choice: str = "1",
+) -> subprocess.CompletedProcess:
+    """Run cli.py, feeding the interactive embedding-preset prompt.
+
+    Both `encode` and `decode` call `_choose_embedding_preset()`
+    (src/cli.py), which reads the preset number from stdin regardless of
+    which subcommand is running, so every invocation needs an answer
+    piped in -- not just encode.
+    """
+
     return subprocess.run(
         [sys.executable, str(CLI_PATH), *args],
+        input=f"{preset_choice}\n",
         capture_output=True,
         text=True,
     )

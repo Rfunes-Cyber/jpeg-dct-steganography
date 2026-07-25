@@ -7,13 +7,18 @@ handler exactly as they are written today:
 * There is no zig-zag traversal in this codebase -- coefficients are
   visited in raster order within each block (see
   JPEGDCTHandler.iter_ac_coefficients), skipping the DC term.
-* There is no "embedding level" / bits-per-block concept -- every AC
-  coefficient with abs(value) > 1 carries exactly one bit
-  (JPEGDCTHandler.is_usable / iter_usable_coefficients).
+* The encoder supports three embedding presets (encoder.PRESETS) that
+  cap how many coefficients get used per 8x8 block: "Maximum Capacity"
+  (unlimited), "Balanced" (4 per block), and "Low Detectability" (2 per
+  block). The preset is *not* recorded in the stego JPEG itself, so
+  decode_message() must be told which preset was used, exactly like
+  encode_message() must be told which one to use.
 
-A dedicated test (test_no_embedding_level_parameter_exists) documents that
-absence so a future change to the encoder's public API doesn't silently
-break the assumptions these tests rely on.
+Unless a test explicitly passes a preset_choice, both encode_message()
+and decode_message() default to preset 1 (Maximum Capacity, no per-block
+limit), which behaves identically to the original unfiltered
+iter_usable_coefficients() traversal -- so most tests below are
+unaffected by the presets' existence.
 """
 
 from pathlib import Path
@@ -233,15 +238,57 @@ def test_decode_grayscale_jpeg_with_no_chroma_components(tmp_path):
     assert output_path.read_bytes() == message.encode("ascii")
 
 
-def test_no_embedding_level_parameter_exists():
-    """Documents that this codebase has no embedding-level / bits-per-block
-    concept. If one is ever added to the encoder, this test should be
-    replaced with real per-level coverage instead of silently passing."""
+@pytest.mark.parametrize(
+    "preset_choice",
+    [
+        pytest.param(1, id="preset_1_maximum_capacity"),
+        pytest.param(2, id="preset_2_balanced"),
+        pytest.param(3, id="preset_3_low_detectability"),
+    ],
+)
+def test_each_embedding_preset_round_trips(tmp_path, preset_choice):
+    """Every preset must encode and decode correctly as long as the same
+    preset is used on both sides -- the presets only change which
+    coefficients are selected, not the parity/header rules."""
 
-    import inspect
+    message = "Preset round trip check!"
+    stego_path = tmp_path / "stego.jpg"
+    output_path = tmp_path / "recovered.txt"
 
-    assert "level" not in inspect.signature(encode_message).parameters
-    assert "level" not in inspect.signature(decode_message).parameters
+    encoding_result = encode_message(
+        str(ORIGINAL_JPEG), str(stego_path), message, preset_choice,
+    )
+    decoding_result = decode_message(
+        str(stego_path), str(output_path), preset_choice,
+    )
+
+    assert output_path.read_bytes() == message.encode("ascii")
+    assert decoding_result.preset_name == encoding_result.preset_name
+    assert decoding_result.max_bits_per_block == encoding_result.max_bits_per_block
+
+
+def test_mismatched_preset_fails_to_decode(tmp_path):
+    """The stego JPEG does not record which preset was used, so decoding
+    with the wrong preset must not silently produce a plausible-looking
+    but wrong message -- it should fail the header/plausibility checks
+    because the coefficient sequence itself is different."""
+
+    message = "this should not decode correctly"
+    stego_path = tmp_path / "stego.jpg"
+    output_path = tmp_path / "recovered.txt"
+
+    encode_message(str(ORIGINAL_JPEG), str(stego_path), message, 1)
+
+    with pytest.raises(ValueError):
+        decode_message(str(stego_path), str(output_path), 3)
+
+
+def test_decode_rejects_invalid_preset_choice(tmp_path):
+    """decode_message() must validate its preset argument the same way
+    encode_message() does, since both rely on encoder.get_embedding_preset()."""
+
+    with pytest.raises(ValueError, match="1, 2, or 3"):
+        decode_message(str(ORIGINAL_JPEG), str(tmp_path / "out.txt"), 4)
 
 
 # ---------------------------------------------------------------------------
@@ -296,5 +343,5 @@ def test_truncated_message_raises():
 
     short_iterator = iter([(None, 3), (None, 5)])
 
-    with pytest.raises(ValueError, match="Ran out of usable coefficients"):
+    with pytest.raises(ValueError, match="Ran out of selected coefficients"):
         _read_bits(short_iterator, bit_count=5, context="the hidden message payload")

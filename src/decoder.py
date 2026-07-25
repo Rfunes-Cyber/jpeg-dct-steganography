@@ -2,7 +2,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-from encoder import HEADER_BITS, coefficient_parity
+from encoder import (
+    HEADER_BITS,
+    coefficient_parity,
+    count_selected_coefficients,
+    get_embedding_preset,
+    iter_selected_coefficients,
+)
 from jpeg_dct_handler import JPEGDCTHandler
 
 
@@ -10,6 +16,8 @@ from jpeg_dct_handler import JPEGDCTHandler
 class DecodingResult:
     """Summary of a decoding operation."""
 
+    preset_name: str
+    max_bits_per_block: int | None
     header_bits: int
     payload_bits: int
     message_bytes: int
@@ -23,11 +31,12 @@ def _read_bits(
 ) -> str:
     """Pull `bit_count` parity bits from the coefficient stream.
 
-    The encoder writes one message bit per usable coefficient by setting
+    The encoder writes one message bit per selected coefficient by setting
     that coefficient's parity, in the exact order produced by
-    `iter_usable_coefficients()`. Reusing the same iterator instance across
-    both the header read and the payload read (rather than restarting it)
-    is what keeps this function aligned with where the encoder left off.
+    `iter_selected_coefficients()` for the chosen preset. Reusing the same
+    iterator instance across both the header read and the payload read
+    (rather than restarting it) is what keeps this function aligned with
+    where the encoder left off.
     """
 
     bits = []
@@ -37,8 +46,9 @@ def _read_bits(
             _, value = next(coefficient_iterator)
         except StopIteration as error:
             raise ValueError(
-                f"Ran out of usable coefficients while reading {context}. "
-                "The stego JPEG may be truncated, corrupted, or may not "
+                f"Ran out of selected coefficients while reading {context}. "
+                "The stego JPEG may be truncated, corrupted, embedded with "
+                "a different preset than the one requested, or may not "
                 "contain a hidden message at all."
             ) from error
 
@@ -64,8 +74,26 @@ def _bits_to_bytes(bits: str) -> bytes:
     )
 
 
-def decode_message(input_path: str, output_path: str) -> DecodingResult:
-    """Extract a hidden message from a stego JPEG and write it to disk."""
+def decode_message(
+    input_path: str,
+    output_path: str,
+    preset_choice: int = 1,
+) -> DecodingResult:
+    """Extract a hidden message from a stego JPEG and write it to disk.
+
+    `preset_choice` must match the preset used when the message was
+    encoded (see encoder.PRESETS): the embedding preset determines which
+    coefficients the encoder wrote bits into (the "Balanced" and "Low
+    Detectability" presets skip coefficients past a per-block limit), and
+    that choice is not recorded anywhere in the stego JPEG itself. Getting
+    it wrong reads the wrong bits, not necessarily a clean error, so the
+    preset must be supplied out of band (e.g. agreed on with the sender)
+    just as it must be supplied to encode_message().
+    """
+
+    # Raises the same ValueError as encode_message() for an invalid
+    # preset number, so callers see one consistent error for this input.
+    preset_name, max_bits_per_block = get_embedding_preset(preset_choice)
 
     handler = JPEGDCTHandler()
     # Reuses the existing handler's load(): identical validation and
@@ -75,21 +103,27 @@ def decode_message(input_path: str, output_path: str) -> DecodingResult:
     # Counting first (via its own fresh generator) tells us the total
     # embedding capacity so the header value can be sanity-checked before
     # we trust it, without disturbing the iterator used below.
-    total_usable_coefficients = handler.count_usable_coefficients()
+    total_selected_coefficients = count_selected_coefficients(
+        handler, max_bits_per_block,
+    )
 
-    if total_usable_coefficients < HEADER_BITS:
+    if total_selected_coefficients < HEADER_BITS:
         raise ValueError(
-            "This JPEG does not contain enough usable coefficients to "
-            f"hold a {HEADER_BITS}-bit header. It cannot be a valid "
-            "stego image produced by this encoder."
+            "This JPEG does not contain enough selected coefficients to "
+            f"hold a {HEADER_BITS}-bit header using the {preset_name} "
+            "preset. It cannot be a valid stego image produced by this "
+            "encoder with this preset."
         )
 
-    max_payload_bits = total_usable_coefficients - HEADER_BITS
+    max_payload_bits = total_selected_coefficients - HEADER_BITS
 
     # One iterator, consumed first for the header and then for the payload,
     # so the payload starts exactly where the header left off -- matching
-    # the encoder's single pass over `iter_usable_coefficients()`.
-    coefficient_iterator = handler.iter_usable_coefficients()
+    # the encoder's single pass over `iter_selected_coefficients()` for
+    # this same preset.
+    coefficient_iterator = iter_selected_coefficients(
+        handler, max_bits_per_block,
+    )
 
     header_bits = _read_bits(
         coefficient_iterator,
@@ -139,6 +173,8 @@ def decode_message(input_path: str, output_path: str) -> DecodingResult:
         ) from error
 
     return DecodingResult(
+        preset_name=preset_name,
+        max_bits_per_block=max_bits_per_block,
         header_bits=HEADER_BITS,
         payload_bits=payload_bit_count,
         message_bytes=len(message_bytes),
@@ -154,7 +190,14 @@ def print_decoding_result(result: DecodingResult) -> None:
     wants to read the output as ASCII can open the file themselves.
     """
 
+    if result.max_bits_per_block is None:
+        block_limit = "Unlimited"
+    else:
+        block_limit = str(result.max_bits_per_block)
+
     print("\nDecoding complete.")
+    print("Embedding preset:", result.preset_name)
+    print("Maximum bits per block:", block_limit)
     print("Header bits read:", result.header_bits)
     print("Payload bits extracted:", result.payload_bits)
     print("Recovered message size:", f"{result.message_bytes} bytes")
@@ -162,13 +205,18 @@ def print_decoding_result(result: DecodingResult) -> None:
 
 
 if __name__ == "__main__":
+    from encoder import choose_embedding_preset
+
     stego_jpeg = input("Enter the stego JPEG path: ").strip()
     output_file_path = input("Enter the output file path: ").strip()
 
     try:
+        selected_preset = choose_embedding_preset()
+
         decoding_result = decode_message(
             stego_jpeg,
             output_file_path,
+            selected_preset,
         )
 
         print_decoding_result(decoding_result)

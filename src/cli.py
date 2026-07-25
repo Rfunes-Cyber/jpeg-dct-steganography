@@ -125,9 +125,12 @@ def main() -> None:
             print_encoding_result(result)
 
         else:
+            preset_choice = _choose_embedding_preset()
+
             result = decode_message(
                 args.input_jpeg,
                 args.output_file,
+                preset_choice,
             )
             print_decoding_result(result)
 

@@ -15,8 +15,11 @@ from encoder import (
     HEADER_BITS,
     change_parity,
     coefficient_parity,
+    count_selected_coefficients,
     encode_message,
+    get_embedding_preset,
     integer_to_bits,
+    iter_selected_coefficients,
     prepare_payload,
     text_to_bits,
 )
@@ -232,7 +235,76 @@ def test_encode_message_rejects_jpeg_with_no_usable_capacity(tmp_path):
     """A solid-color JPEG has essentially no non-zero, non-unit AC
     coefficients, so it cannot even hold the fixed-length header."""
 
-    with pytest.raises(ValueError, match="enough usable coefficients"):
+    with pytest.raises(ValueError, match="enough selected coefficients"):
         encode_message(
             str(TINY_SOLID_JPEG), str(tmp_path / "stego.jpg"), "hi",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Embedding presets
+# ---------------------------------------------------------------------------
+
+
+def test_get_embedding_preset_returns_expected_presets():
+    assert get_embedding_preset(1) == ("Maximum Capacity", None)
+    assert get_embedding_preset(2) == ("Balanced", 4)
+    assert get_embedding_preset(3) == ("Low Detectability", 2)
+
+
+def test_get_embedding_preset_rejects_invalid_choice():
+    with pytest.raises(ValueError, match="1, 2, or 3"):
+        get_embedding_preset(4)
+
+    with pytest.raises(ValueError, match="1, 2, or 3"):
+        get_embedding_preset(0)
+
+
+@pytest.mark.parametrize("max_bits_per_block", [1, 2, 4])
+def test_iter_selected_coefficients_never_exceeds_per_block_limit(max_bits_per_block):
+    """The per-block cap is the whole point of the "Balanced" / "Low
+    Detectability" presets: verify it directly against the real handler
+    rather than only indirectly through a full encode/decode round trip."""
+
+    handler = JPEGDCTHandler()
+    handler.load(str(ORIGINAL_JPEG))
+
+    bits_used_per_block: dict[tuple[str, int, int], int] = {}
+
+    for location, _ in iter_selected_coefficients(handler, max_bits_per_block):
+        block_key = (location.component, location.block_row, location.block_column)
+        bits_used_per_block[block_key] = bits_used_per_block.get(block_key, 0) + 1
+
+    assert bits_used_per_block
+    assert max(bits_used_per_block.values()) <= max_bits_per_block
+
+
+def test_lower_bits_per_block_never_increases_capacity():
+    """A stricter per-block cap should select fewer (or equal) coefficients
+    overall than a looser one -- capacity should shrink monotonically as
+    detectability improves (Low Detectability <= Balanced <= Maximum)."""
+
+    handler = JPEGDCTHandler()
+    handler.load(str(ORIGINAL_JPEG))
+
+    unlimited_count = count_selected_coefficients(handler, None)
+    balanced_count = count_selected_coefficients(handler, 4)
+    low_detectability_count = count_selected_coefficients(handler, 2)
+
+    assert low_detectability_count <= balanced_count <= unlimited_count
+
+
+def test_encode_message_reports_selected_preset(tmp_path):
+    result = encode_message(
+        str(ORIGINAL_JPEG), str(tmp_path / "stego.jpg"), "hi", 2,
+    )
+
+    assert result.preset_name == "Balanced"
+    assert result.max_bits_per_block == 4
+
+
+def test_encode_message_rejects_invalid_preset_choice(tmp_path):
+    with pytest.raises(ValueError, match="1, 2, or 3"):
+        encode_message(
+            str(ORIGINAL_JPEG), str(tmp_path / "stego.jpg"), "hi", 5,
         )
