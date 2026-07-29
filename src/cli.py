@@ -71,7 +71,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _choose_embedding_preset() -> int:
     """Display the embedding preset menu and return the user's choice."""
 
-    print("\nChoose an embedding preset:\n")
+    print("\nChoose a preset:\n")
 
     print("1. Maximum Capacity")
     print("   Uses all available coefficients in each 8x8 block.")
@@ -135,6 +135,10 @@ def main() -> None:
             print_encoding_result(result)
 
         else:
+            print(
+                "\nSelect the preset that was used to encode this image."
+            )
+
             preset_choice = _choose_embedding_preset()
 
             result = decode_message(
@@ -142,6 +146,7 @@ def main() -> None:
                 args.output_file,
                 preset_choice,
             )
+
             print_decoding_result(result)
 
             if args.show:
@@ -153,7 +158,5 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
-
-
 if __name__ == "__main__":
     main()
